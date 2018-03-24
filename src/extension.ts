@@ -117,13 +117,20 @@ class Paster {
 
     private static parse(content) {
         let rules = vscode.workspace.getConfiguration('MarkdownPaste').rules;
-
+        let editor = vscode.window.activeTextEditor;
+        let selection = editor.selection;
+        let selectText = editor.document.getText(selection) || "";
         for (var i = 0; i < rules.length; i++) {
             let rule = rules[i];
             var re = new RegExp(rule.regex, rule.options);
             var reps = rule.replace;
             if (re.test(content)) {
-                var newstr = content.replace(re, reps);
+                var newstr = content.replace(re, reps).replace("${selectText}", selectText);
+                if (selectText) {
+                    editor.edit(builder => {
+                        builder.replace(selection, newstr);
+                    });
+                }
                 return newstr;
             }
         }
