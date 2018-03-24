@@ -24,6 +24,15 @@ export function deactivate() {
 }
 
 class Paster {
+    static PATH_VARIABLE_CURRNET_FILE_DIR = /\$\{currentFileDir\}/;
+    static PATH_VARIABLE_PROJECT_ROOT = /\$\{projectRoot\}/;
+    static PATH_VARIABLE_CURRNET_FILE_NAME = /\$\{currentFileName\}/;
+    static PATH_VARIABLE_CURRNET_FILE_NAME_WITHOUT_EXT = /\$\{currentFileNameWithoutExt\}/;
+
+    static folderPathFromConfig: string;
+    static basePathFromConfig: string;
+    static prefixFromConfig: string;
+    static suffixFromConfig: string;
 
     public static pasteText() {
         var content = clipboard.readSync();
@@ -71,7 +80,7 @@ class Paster {
 
         // User may be input a path with backward slashes (\), so need to replace all '\' to '/'.
         inputVal = inputVal.replace(
-            "${workspaceRoot}", vscode.workspace.rootPath).replace(/\\/g, '/');
+            "${projectRoot}", vscode.workspace.rootPath).replace(/\\/g, '/');
 
         if (inputVal && (inputVal.length !== inputVal.trim().length)) {
             vscode.window.showErrorMessage('The specified path is invalid: "' + inputVal + '"');
@@ -87,7 +96,8 @@ class Paster {
                     return;
                 }
 
-                imagePath = this.renderFilePath(editor.document.languageId, filePath, imagePath);
+                // imagePath = this.renderFilePath(editor.document.languageId, filePath, imagePath);
+                imagePath = this.renderFilePath(editor.document.languageId, this.basePathFromConfig, imagePath, this.prefixFromConfig, this.suffixFromConfig);
 
                 editor.edit(edit => {
                     let current = editor.selection;
@@ -138,6 +148,9 @@ class Paster {
             return;
         }
 
+        let filePath = fileUri.fsPath;
+        let projectPath = vscode.workspace.rootPath;
+
         // get selection as image file name, need check
         var selection = editor.selection;
         var selectText = editor.document.getText(selection);
@@ -147,18 +160,36 @@ class Paster {
             return;
         }
 
-        // get image destination path
-        let folderPathFromConfig = vscode.workspace.getConfiguration('pasteImage').path;
+        // load config pasteImage.path/pasteImage.basePath
+        this.folderPathFromConfig = vscode.workspace.getConfiguration('pasteImage')['path'];
+        if (!this.folderPathFromConfig) {
+            this.folderPathFromConfig = "${currentFileDir}";
+        }
+        if (this.folderPathFromConfig.length !== this.folderPathFromConfig.trim().length) {
+            vscode.window.showInformationMessage(`The config pasteImage.path = '${this.folderPathFromConfig}' is invalid. please check your config.`);
+            return;
+        }
+        this.basePathFromConfig = vscode.workspace.getConfiguration('pasteImage')['basePath'];
+        if (!this.basePathFromConfig) {
+            this.basePathFromConfig = "";
+        }
+        if (this.basePathFromConfig.length !== this.basePathFromConfig.trim().length) {
+            vscode.window.showInformationMessage(`The config pasteImage.path = '${this.basePathFromConfig}' is invalid. please check your config.`);
+            return;
+        }
+        this.prefixFromConfig = vscode.workspace.getConfiguration('pasteImage')['prefix'];
+        this.suffixFromConfig = vscode.workspace.getConfiguration('pasteImage')['suffix'];
 
-        folderPathFromConfig = folderPathFromConfig.replace("${workspaceRoot}", vscode.workspace.rootPath);
+        this.folderPathFromConfig = this.replacePathVariable(this.folderPathFromConfig, projectPath, filePath);
+        this.basePathFromConfig = this.replacePathVariable(this.basePathFromConfig, projectPath, filePath);
 
-        if (folderPathFromConfig && (folderPathFromConfig.length !== folderPathFromConfig.trim().length)) {
-            vscode.window.showErrorMessage('The specified path is invalid: "' + folderPathFromConfig + '"');
+        if (this.folderPathFromConfig && (this.folderPathFromConfig.length !== this.folderPathFromConfig.trim().length)) {
+            vscode.window.showErrorMessage('The specified path is invalid: "' + this.folderPathFromConfig + '"');
             return;
         }
 
         let imagePath = this.getImagePath(
-            fileUri.fsPath, selectText, folderPathFromConfig);
+            fileUri.fsPath, selectText, this.folderPathFromConfig);
         let fileNameLength = selectText ? selectText.length : 19; // yyyy-mm-dd-hh-mm-ss
 
         let silence = vscode.workspace.getConfiguration('pasteImage').silence;
@@ -283,14 +314,44 @@ class Paster {
      * render the image file path dependen on file type
      * e.g. in markdown image file path will render to ![](path)
      */
-    public static renderFilePath(languageId: string, docPath: string, imageFilePath: string): string {
-        // relative will be add backslash characters so need to replace '\' to '/' here.
-        imageFilePath = path.relative(path.dirname(docPath), imageFilePath).replace(/\\/g, '/');
+    // public static renderFilePath(languageId: string, docPath: string, imageFilePath: string): string {
+    //     // relative will be add backslash characters so need to replace '\' to '/' here.
+    //     imageFilePath = path.relative(path.dirname(docPath), imageFilePath).replace(/\\/g, '/');
 
-        if (languageId === 'markdown') {
-            return `![](${imageFilePath})`;
-        } else {
-            return imageFilePath;
+    //     if (languageId === 'markdown') {
+    //         return `![](${imageFilePath})`;
+    //     } else {
+    //         return imageFilePath;
+    //     }
+    // }
+    public static renderFilePath(languageId: string, basePath: string, imageFilePath: string, prefix: string, suffix: string): string {
+        if (basePath) {
+             // relative will be add backslash characters so need to replace '\' to '/' here.
+            imageFilePath = path.relative(basePath, imageFilePath).replace(/\\/g, '/')
         }
+
+        imageFilePath = `${prefix}${imageFilePath}`;
+
+        switch (languageId) {
+            case "markdown":
+                return `![](${imageFilePath})`
+            case "asciidoc":
+                return `image::${imageFilePath}[]`
+            default:
+                return imageFilePath;
+        }
+    }
+
+    public static replacePathVariable(pathStr: string, projectRoot: string, curFilePath: string): string {
+        let currentFileDir = path.dirname(curFilePath);
+        let ext = path.extname(curFilePath);
+        let fileName = path.basename(curFilePath);
+        let fileNameWithoutExt = path.basename(curFilePath, ext);
+
+        pathStr = pathStr.replace(this.PATH_VARIABLE_PROJECT_ROOT, projectRoot);
+        pathStr = pathStr.replace(this.PATH_VARIABLE_CURRNET_FILE_DIR, currentFileDir);
+        pathStr = pathStr.replace(this.PATH_VARIABLE_CURRNET_FILE_NAME, fileName);
+        pathStr = pathStr.replace(this.PATH_VARIABLE_CURRNET_FILE_NAME_WITHOUT_EXT, fileNameWithoutExt);
+        return pathStr;
     }
 }
